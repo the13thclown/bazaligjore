@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
-import { q } from "./db.js";
+import { q, qSandboxed } from "./db.js";
 import { FAMILY_GRAPH_RESOURCE_URI } from "./ui-resource.js";
 
 /* ------------------------------------------------------------------ */
@@ -396,17 +396,22 @@ export function registerTools(server: McpServer) {
         where += ` AND cd.decision_year = $${params.length}`;
       }
       params.push(limit);
-      const rows = await q<{
+      let rows: {
         id: number; decision_number: string | null; decision_year: number;
         decision_date: string | null; title: string; document_url: string; has_text: boolean;
-      }>(
-        `SELECT cd.id, cd.decision_number, cd.decision_year,
-           to_char(cd.decision_date, 'YYYY-MM-DD') AS decision_date,
-           cd.title, cd.document_url, (cd.raw_text IS NOT NULL) AS has_text
-         FROM court_decision cd WHERE ${where}
-         ORDER BY cd.decision_date DESC NULLS LAST LIMIT $${params.length}`,
-        params
-      );
+      }[];
+      try {
+        rows = await q(
+          `SELECT cd.id, cd.decision_number, cd.decision_year,
+             to_char(cd.decision_date, 'YYYY-MM-DD') AS decision_date,
+             cd.title, cd.document_url, (cd.raw_text IS NOT NULL) AS has_text
+           FROM court_decision cd WHERE ${where}
+           ORDER BY cd.decision_date DESC NULLS LAST LIMIT $${params.length}`,
+          params
+        );
+      } catch {
+        return text("Constitutional Court (GJK) decisions are not available in this deployment.");
+      }
       if (rows.length === 0) return text("No GJK decisions matched. Try fewer/other words; ë/ç variants may help.");
       return {
         content: [{
@@ -437,10 +442,12 @@ export function registerTools(server: McpServer) {
       },
     },
     async (args) => {
-      const rows = await q<{ title: string; raw_text: string | null }>(
-        `SELECT title, raw_text FROM court_decision WHERE id = $1`,
-        [args.id]
-      );
+      let rows: { title: string; raw_text: string | null }[];
+      try {
+        rows = await q(`SELECT title, raw_text FROM court_decision WHERE id = $1`, [args.id]);
+      } catch {
+        return text("Constitutional Court (GJK) decisions are not available in this deployment.");
+      }
       if (!rows[0]) return text("Decision not found.");
       if (!rows[0].raw_text) return text("This decision has no OCR text yet.");
       const full = rows[0].raw_text;
@@ -490,8 +497,11 @@ export function registerTools(server: McpServer) {
 
       const MAX_ROWS = 200;
       try {
-        const rows = await q<Record<string, unknown>>(
-          `SELECT * FROM (${cleaned}) _q LIMIT ${MAX_ROWS + 1}`
+        // 8s ceiling for ad-hoc SQL — tighter than the 15s pool default, to
+        // limit how long one public query can hold a connection.
+        const rows = await qSandboxed<Record<string, unknown>>(
+          `SELECT * FROM (${cleaned}) _q LIMIT ${MAX_ROWS + 1}`,
+          8000
         );
         const truncated = rows.length > MAX_ROWS;
         const shown = truncated ? rows.slice(0, MAX_ROWS) : rows;
