@@ -16,8 +16,13 @@ const readOnlyOnConnect = (client: pg.PoolClient) => {
   );
 };
 
-// Main pool for tool queries.
-export const pool = new pg.Pool({ ...baseConfig, max: 10 });
+// Main pool for tool queries. Sized against the shared Postgres max_connections
+// (the DB is shared with other apps), so keep the ceiling modest and tunable
+// via env without a redeploy.
+export const pool = new pg.Pool({
+  ...baseConfig,
+  max: Number(process.env.PG_POOL_MAX ?? 15),
+});
 pool.on("connect", readOnlyOnConnect);
 
 // Dedicated tiny pool for the health check, so a saturated query pool
