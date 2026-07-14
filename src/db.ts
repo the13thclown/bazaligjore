@@ -18,10 +18,13 @@ const readOnlyOnConnect = (client: pg.PoolClient) => {
 
 // Main pool for tool queries. Sized against the shared Postgres max_connections
 // (the DB is shared with other apps), so keep the ceiling modest and tunable
-// via env without a redeploy.
+// via env without a redeploy. connectionTimeoutMillis makes a request give up
+// after 10s waiting for a free connection (instead of pg's default infinite
+// wait), so a burst can't pile up unbounded and wedge the event loop.
 export const pool = new pg.Pool({
   ...baseConfig,
   max: Number(process.env.PG_POOL_MAX ?? 15),
+  connectionTimeoutMillis: 10_000,
 });
 pool.on("connect", readOnlyOnConnect);
 
